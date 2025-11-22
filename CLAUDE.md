@@ -21,13 +21,25 @@ This is a Rust application using GPUI, the GPU-accelerated UI framework from the
 
 ### Architecture
 
-- **src/main.rs**: Entry point containing a simple GPUI application with a `HelloWorld` component
-- The app demonstrates basic GPUI patterns: creating a window, defining a renderable struct implementing `Render`, and using GPUI's flexbox-style layout system
+- **src/main.rs**: Single-file application implementing a high-performance data table displaying 10,000 stock quote rows
+- The app demonstrates advanced GPUI patterns including virtualized lists, custom scrollbar, column sorting, and resizable columns
+
+### Key Components
+
+- `Quote`: Stock quote data structure with random generation for demo purposes
+- `TableRow`: Implements `RenderOnce` via `IntoElement` derive for efficient row rendering
+- `DataTable`: Main component implementing `Render`, manages state for sorting, scrolling, column resizing
+- `FIELDS`: Constant array defining column names and default widths
 
 ### GPUI Patterns Used
 
 - `Application::new().run()` - Application lifecycle
 - `cx.open_window()` - Window creation with bounds
-- `div()` builder pattern for UI elements with flexbox layout (`.flex()`, `.flex_col()`, `.gap_*()`, etc.)
-- `Render` trait implementation for custom components
+- `uniform_list()` - Virtualized list for rendering large datasets efficiently
+- `UniformListScrollHandle` - Scroll state management for virtualized lists
+- `canvas()` - Low-level drawing and mouse event handling for scrollbar/resize
+- `div()` builder pattern for UI elements with flexbox layout
+- `Render` trait for stateful components, `RenderOnce`/`IntoElement` for stateless elements
+- `cx.listener()` and `cx.processor()` for event handling and list item generation
 - `SharedString` for text that can be efficiently shared
+- `Rc<Quote>` pattern to share data across rendered items without cloning

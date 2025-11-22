@@ -160,10 +160,11 @@ impl Quote {
 struct TableRow {
     ix: usize,
     quote: Rc<Quote>,
+    column_widths: Vec<Pixels>,
 }
 impl TableRow {
-    fn new(ix: usize, quote: Rc<Quote>) -> Self {
-        Self { ix, quote }
+    fn new(ix: usize, quote: Rc<Quote>, column_widths: Vec<Pixels>) -> Self {
+        Self { ix, quote, column_widths }
     }
 
     fn render_cell(&self, key: &str, width: Pixels, color: gpui::Hsla) -> impl IntoElement {
@@ -267,7 +268,13 @@ impl RenderOnce for TableRow {
             })
             .py_0p5()
             .px_2()
-            .children(FIELDS.map(|(key, width)| self.render_cell(key, px(width), color)))
+            .children(
+                FIELDS
+                    .iter()
+                    .zip(self.column_widths.iter())
+                    .map(|((key, _), width)| self.render_cell(key, *width, color))
+                    .collect::<Vec<_>>()
+            )
     }
 }
 
@@ -282,6 +289,10 @@ struct DataTable {
     sort_column: Option<&'static str>,
     /// Current sort direction
     sort_direction: SortDirection,
+    /// Dynamic column widths (in pixels)
+    column_widths: Vec<Pixels>,
+    /// Column being resized: (column_index, initial_mouse_x)
+    resizing_column: Option<(usize, Pixels)>,
 }
 
 impl DataTable {
@@ -293,6 +304,8 @@ impl DataTable {
             drag_position: None,
             sort_column: None,
             sort_direction: SortDirection::Ascending,
+            column_widths: FIELDS.iter().map(|(_, w)| px(*w)).collect(),
+            resizing_column: None,
         }
     }
 
@@ -452,11 +465,128 @@ impl DataTable {
                 .size_full(),
             )
     }
+
+    fn render_resize_handler(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let initial_widths = self.column_widths.clone();
+        let resizing = self.resizing_column;
+
+        canvas(
+            |_, _, _| (),
+            move |_, _, window, _| {
+                window.on_mouse_event({
+                    let entity = entity.clone();
+                    let initial_widths = initial_widths.clone();
+                    move |ev: &MouseMoveEvent, _, _, cx| {
+                        let Some((col_idx, start_x)) = resizing else {
+                            return;
+                        };
+
+                        if !ev.dragging() {
+                            return;
+                        }
+
+                        let delta = ev.position.x - start_x;
+                        let new_width = (initial_widths[col_idx] + delta).max(px(30.));
+
+                        entity.update(cx, |this, _| {
+                            this.column_widths[col_idx] = new_width;
+                        });
+                    }
+                });
+
+                window.on_mouse_event({
+                    let entity = entity.clone();
+                    move |_: &MouseUpEvent, _, _, cx| {
+                        entity.update(cx, |this, _| {
+                            this.resizing_column = None;
+                        });
+                    }
+                });
+            },
+        )
+        .size_full()
+        .absolute()
+    }
+
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let column_widths = self.column_widths.clone();
+
+        div()
+            .flex()
+            .flex_row()
+            .w_full()
+            .overflow_hidden()
+            .border_b_1()
+            .border_color(rgb(0xE0E0E0))
+            .text_color(rgb(0x555555))
+            .bg(rgb(0xF0F0F0))
+            .py_1()
+            .px_2()
+            .text_xs()
+            .children(
+                FIELDS
+                    .iter()
+                    .enumerate()
+                    .zip(column_widths.iter())
+                    .map(|((col_idx, (key, _)), width)| {
+                        let is_sorted = self.sort_column == Some(*key);
+                        let indicator = if is_sorted {
+                            self.sort_direction.indicator()
+                        } else {
+                            ""
+                        };
+                        let label = format!(
+                            "{}{}",
+                            key.replace("_", " ").to_uppercase(),
+                            indicator
+                        );
+
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .flex_shrink_0()
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("header-{}", key)))
+                                    .whitespace_nowrap()
+                                    .truncate()
+                                    .px_1()
+                                    .w(*width - px(4.)) // Reserve space for resize handle
+                                    .cursor_pointer()
+                                    .hover(|this| this.bg(rgb(0xE0E0E0)))
+                                    .when(is_sorted, |this| this.font_weight(gpui::FontWeight::BOLD))
+                                    .on_click(cx.listener(move |this, _, _, _| {
+                                        this.toggle_sort(key);
+                                    }))
+                                    .child(label),
+                            )
+                            .child(
+                                // Resize handle
+                                div()
+                                    .id(SharedString::from(format!("resize-{}", col_idx)))
+                                    .w(px(4.))
+                                    .h_full()
+                                    .cursor(gpui::CursorStyle::ResizeLeftRight)
+                                    .hover(|this| this.bg(rgb(0x4A90D9)))
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(move |this, ev: &MouseDownEvent, _, _| {
+                                            this.resizing_column = Some((col_idx, ev.position.x));
+                                        }),
+                                    ),
+                            )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+    }
 }
 
 impl Render for DataTable {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .relative()
             .bg(gpui::white())
             .text_sm()
             .size_full()
@@ -478,48 +608,7 @@ impl Render for DataTable {
                     .border_1()
                     .border_color(rgb(0xE0E0E0))
                     .rounded_sm()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .w_full()
-                            .overflow_hidden()
-                            .border_b_1()
-                            .border_color(rgb(0xE0E0E0))
-                            .text_color(rgb(0x555555))
-                            .bg(rgb(0xF0F0F0))
-                            .py_1()
-                            .px_2()
-                            .text_xs()
-                            .children(FIELDS.map(|(key, width)| {
-                                let is_sorted = self.sort_column == Some(key);
-                                let indicator = if is_sorted {
-                                    self.sort_direction.indicator()
-                                } else {
-                                    ""
-                                };
-                                let label = format!(
-                                    "{}{}",
-                                    key.replace("_", " ").to_uppercase(),
-                                    indicator
-                                );
-
-                                div()
-                                    .id(SharedString::from(format!("header-{}", key)))
-                                    .whitespace_nowrap()
-                                    .flex_shrink_0()
-                                    .truncate()
-                                    .px_1()
-                                    .w(px(width))
-                                    .cursor_pointer()
-                                    .hover(|this| this.bg(rgb(0xE0E0E0)))
-                                    .when(is_sorted, |this| this.font_weight(gpui::FontWeight::BOLD))
-                                    .on_click(cx.listener(move |this, _, _, _| {
-                                        this.toggle_sort(key);
-                                    }))
-                                    .child(label)
-                            })),
-                    )
+                    .child(self.render_header(cx))
                     .child(
                         div()
                             .relative()
@@ -533,7 +622,7 @@ impl Render for DataTable {
                                         let mut items = Vec::with_capacity(range.end - range.start);
                                         for i in range {
                                             if let Some(quote) = this.quotes.get(i) {
-                                                items.push(TableRow::new(i, quote.clone()));
+                                                items.push(TableRow::new(i, quote.clone(), this.column_widths.clone()));
                                             }
                                         }
                                         items
@@ -545,6 +634,7 @@ impl Render for DataTable {
                             .child(self.render_scrollbar(window, cx)),
                     ),
             )
+            .child(self.render_resize_handler(cx))
     }
 }
 

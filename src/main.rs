@@ -10,6 +10,28 @@ const TOTAL_ITEMS: usize = 10000;
 const SCROLLBAR_THUMB_WIDTH: Pixels = px(8.);
 const SCROLLBAR_THUMB_HEIGHT: Pixels = px(100.);
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SortDirection {
+    Ascending,
+    Descending,
+}
+
+impl SortDirection {
+    fn toggle(self) -> Self {
+        match self {
+            SortDirection::Ascending => SortDirection::Descending,
+            SortDirection::Descending => SortDirection::Ascending,
+        }
+    }
+
+    fn indicator(&self) -> &'static str {
+        match self {
+            SortDirection::Ascending => " ▲",
+            SortDirection::Descending => " ▼",
+        }
+    }
+}
+
 pub struct Quote {
     name: SharedString,
     symbol: SharedString,
@@ -256,6 +278,10 @@ struct DataTable {
     scroll_handle: UniformListScrollHandle,
     /// The position in thumb bounds when dragging start mouse down.
     drag_position: Option<Point<Pixels>>,
+    /// Current sort column (field key from FIELDS)
+    sort_column: Option<&'static str>,
+    /// Current sort direction
+    sort_direction: SortDirection,
 }
 
 impl DataTable {
@@ -265,11 +291,68 @@ impl DataTable {
             visible_range: 0..0,
             scroll_handle: UniformListScrollHandle::new(),
             drag_position: None,
+            sort_column: None,
+            sort_direction: SortDirection::Ascending,
         }
     }
 
     fn generate(&mut self) {
         self.quotes = (0..TOTAL_ITEMS).map(|_| Rc::new(Quote::random())).collect();
+    }
+
+    fn toggle_sort(&mut self, column: &'static str) {
+        if self.sort_column == Some(column) {
+            self.sort_direction = self.sort_direction.toggle();
+        } else {
+            self.sort_column = Some(column);
+            self.sort_direction = SortDirection::Ascending;
+        }
+        self.sort_quotes();
+    }
+
+    fn sort_quotes(&mut self) {
+        let Some(column) = self.sort_column else {
+            return;
+        };
+
+        let ascending = self.sort_direction == SortDirection::Ascending;
+
+        self.quotes.sort_by(|a, b| {
+            let ordering = match column {
+                "id" => std::cmp::Ordering::Equal, // ID is based on index, handled separately
+                "symbol" => a.symbol.cmp(&b.symbol),
+                "name" => a.name.cmp(&b.name),
+                "last_done" => a.last_done.partial_cmp(&b.last_done).unwrap_or(std::cmp::Ordering::Equal),
+                "prev_close" => a.prev_close.partial_cmp(&b.prev_close).unwrap_or(std::cmp::Ordering::Equal),
+                "change" => a.change().partial_cmp(&b.change()).unwrap_or(std::cmp::Ordering::Equal),
+                "open" => a.open.partial_cmp(&b.open).unwrap_or(std::cmp::Ordering::Equal),
+                "low" => a.low.partial_cmp(&b.low).unwrap_or(std::cmp::Ordering::Equal),
+                "high" => a.high.partial_cmp(&b.high).unwrap_or(std::cmp::Ordering::Equal),
+                "ttm" => a.ttm.partial_cmp(&b.ttm).unwrap_or(std::cmp::Ordering::Equal),
+                "market_cap" => a.market_cap.partial_cmp(&b.market_cap).unwrap_or(std::cmp::Ordering::Equal),
+                "float_cap" => a.float_cap.partial_cmp(&b.float_cap).unwrap_or(std::cmp::Ordering::Equal),
+                "turnover" => a.turnover.partial_cmp(&b.turnover).unwrap_or(std::cmp::Ordering::Equal),
+                "volume" => a.volume.cmp(&b.volume),
+                "turnover_ratio" => a.turnover_ratio().partial_cmp(&b.turnover_ratio()).unwrap_or(std::cmp::Ordering::Equal),
+                "pe" => a.pe.partial_cmp(&b.pe).unwrap_or(std::cmp::Ordering::Equal),
+                "pb" => a.pb.partial_cmp(&b.pb).unwrap_or(std::cmp::Ordering::Equal),
+                "eps" => a.eps.partial_cmp(&b.eps).unwrap_or(std::cmp::Ordering::Equal),
+                "shares" => a.shares.partial_cmp(&b.shares).unwrap_or(std::cmp::Ordering::Equal),
+                "dividend" => a.dividend.partial_cmp(&b.dividend).unwrap_or(std::cmp::Ordering::Equal),
+                "yield" => a.dividend_yield.partial_cmp(&b.dividend_yield).unwrap_or(std::cmp::Ordering::Equal),
+                "dividend_per_share" => a.dividend_per_share.partial_cmp(&b.dividend_per_share).unwrap_or(std::cmp::Ordering::Equal),
+                "dividend_date" => a.dividend_date.cmp(&b.dividend_date),
+                "dividend_payment" => a.dividend_payment.partial_cmp(&b.dividend_payment).unwrap_or(std::cmp::Ordering::Equal),
+                "timestamp" => a.timestamp.cmp(&b.timestamp),
+                _ => std::cmp::Ordering::Equal,
+            };
+
+            if ascending {
+                ordering
+            } else {
+                ordering.reverse()
+            }
+        });
     }
 
     fn table_bounds(&self) -> Bounds<Pixels> {
@@ -409,13 +492,32 @@ impl Render for DataTable {
                             .px_2()
                             .text_xs()
                             .children(FIELDS.map(|(key, width)| {
+                                let is_sorted = self.sort_column == Some(key);
+                                let indicator = if is_sorted {
+                                    self.sort_direction.indicator()
+                                } else {
+                                    ""
+                                };
+                                let label = format!(
+                                    "{}{}",
+                                    key.replace("_", " ").to_uppercase(),
+                                    indicator
+                                );
+
                                 div()
+                                    .id(SharedString::from(format!("header-{}", key)))
                                     .whitespace_nowrap()
                                     .flex_shrink_0()
                                     .truncate()
                                     .px_1()
                                     .w(px(width))
-                                    .child(key.replace("_", " ").to_uppercase())
+                                    .cursor_pointer()
+                                    .hover(|this| this.bg(rgb(0xE0E0E0)))
+                                    .when(is_sorted, |this| this.font_weight(gpui::FontWeight::BOLD))
+                                    .on_click(cx.listener(move |this, _, _, _| {
+                                        this.toggle_sort(key);
+                                    }))
+                                    .child(label)
                             })),
                     )
                     .child(
